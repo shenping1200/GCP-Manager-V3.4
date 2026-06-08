@@ -396,3 +396,109 @@ pip install PySocks
 ### v7.4 使用提醒
 
 v7.4 会在创建实例时自动放开网络访问。该行为方便快速部署和测试，但会扩大实例公网暴露面。请确认实例内服务、SSH 密码、密钥和系统安全配置满足你的使用场景。
+
+## v7.6 更新说明
+
+v7.6 在 v7.4 的默认创建策略基础上，新增面向 AI 和自动化工具的本地任务接口，重点解决“导入账号后自动创建实例、自动执行安装命令、自动反馈结果”的批量流程。
+
+### 核心能力
+
+- 本地 API 服务：程序启动后在 `127.0.0.1:18765` 提供 HTTP JSON 接口，只允许本机访问。
+- 自动任务模板：可以先设置 Root 密码、安装命令、验证命令、并发数、重试次数等参数。
+- 新账号监听：程序每 3 秒检测本地账号库，发现新导入的 JSON 账号后自动加入任务队列。
+- 任务队列：支持陆续导入账号，也支持一次性导入多个账号。
+- 高并发后台执行：创建实例、等待 SSH、执行命令、验证结果全部放到后台 worker，不阻塞 GUI。
+- 并发上限优化：`max_workers` 最高支持 `20`，适合多账号批量处理。
+- 结果报告：可通过接口查看每个账号、每台实例的执行状态和失败原因。
+
+### 自动任务流程
+
+1. 打开 `GCP_Manager_v7.6.exe`。
+2. 通过本地 API 设置自动任务模板。
+3. 在软件中导入新的 GCP 服务账号 JSON。
+4. 程序检测到新增账号后自动创建实例。
+5. 实例创建成功后等待 SSH 就绪。
+6. 执行预设安装命令。
+7. 可选执行验证命令。
+8. 通过任务报告接口查看最终结果。
+
+### API 接口
+
+基础地址：
+
+```text
+http://127.0.0.1:18765
+```
+
+常用接口：
+
+- `GET /api/status`：查看程序版本、账号数量、实例数量和最近任务。
+- `GET /api/accounts`：查看已导入账号列表，不返回 JSON 密钥内容。
+- `GET /api/logs?since=0&limit=200`：读取程序日志。
+- `GET /api/tasks`：读取最近任务状态。
+- `GET /api/task_report`：读取任务汇总报告。
+- `GET /api/automation`：查看自动任务配置和队列状态。
+- `POST /api/automation`：设置自动任务模板。
+- `POST /api/automation/stop`：停止自动任务监听并清空待处理队列。
+- `POST /api/automation/run_existing`：对当前已导入账号手动加入任务队列。
+
+### 设置自动任务示例
+
+```powershell
+$body = @{
+  enabled = $true
+  max_workers = 20
+  count = 1
+  use_free_regions = $true
+  root_password = "你的Root密码"
+  post_command = "你的安装命令"
+  verify_command = "docker ps"
+  retry_count = 2
+  command_timeout = 1800
+  ssh_timeout = 300
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:18765/api/automation" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+设置完成后，只要继续导入新的 JSON 账号，程序就会自动按该模板执行。
+
+### 一次性处理已有账号
+
+如果账号已经导入，可以设置 `run_existing = $true`，或单独调用：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:18765/api/automation/run_existing" `
+  -ContentType "application/json" `
+  -Body "{}"
+```
+
+### 并发说明
+
+- `max_workers` 控制同时处理的账号任务数，最高 `20`。
+- 每个账号任务独立执行，互不影响。
+- 创建失败、SSH 未就绪、命令失败都会记录到任务结果中。
+- 建议根据本机网络、GCP API 配额和账号数量设置合理并发。
+- 20 并发适合快速批量处理，但如果遇到 GCP 限流或资源不足，可降低并发后重试。
+
+### 安全说明
+
+- API 只绑定 `127.0.0.1`，不对外网开放。
+- `/api/accounts` 不返回服务账号 JSON 密钥内容。
+- 自动任务会按照你设置的 Root 密码和安装命令执行，请确认命令来源可信。
+- 全开放防火墙适合快速部署场景，但会扩大公网暴露面，请自行评估风险。
+- 不要把 Root 密码、Token、服务账号 JSON、`accounts.db` 上传到公开仓库。
+
+### v7.6 发布包
+
+发布页提供 `GCP_Manager_v7.6.zip`，解压后运行：
+
+```text
+GCP_Manager_v7.6\GCP_Manager_v7.6.exe
+```
+
+该版本仍为多文件模式，不需要打包成单文件 exe。
